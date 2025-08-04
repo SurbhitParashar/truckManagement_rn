@@ -10,19 +10,35 @@ import {
   Platform,
 } from 'react-native';
 import { FontAwesome, MaterialIcons } from '@expo/vector-icons';
+import { login } from '../api/authServices';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.85;
 
 export default function LoginScreen({ navigation }) {
-  const [userId, setUserId] = useState('');
+
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+
+
+  const onLogin = async () => {
+    try {
+      const { token, user } = await login(username, password);
+      navigation.replace('EldConnectScreen', { token, user });
+    } catch (err) {
+      Alert.alert('Login failed', err.response?.data?.message || err.message);
+    }
+  };
+
+
+
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.select({ ios: 'padding', android: null })}
     >
+
       <View style={styles.card}>
         <View style={styles.iconWrapper}>
           <MaterialIcons name="lock-outline" size={32} color="#fff" />
@@ -41,8 +57,8 @@ export default function LoginScreen({ navigation }) {
           <TextInput
             style={styles.input}
             placeholder="Enter your user ID"
-            value={userId}
-            onChangeText={setUserId}
+            value={username}
+            onChangeText={setUsername}
             autoCapitalize="none"
           />
         </View>
@@ -65,10 +81,8 @@ export default function LoginScreen({ navigation }) {
 
         <TouchableOpacity
           style={styles.button}
-          onPress={() => {
-            /* TODO: handle auth, then: */
-            navigation.navigate('ELDConnectScreen');
-          }}
+          // onPress={onLogin}
+          onPress={() => navigation.navigate('EldConnectScreen')}
         >
           <Text style={styles.buttonText}>Sign In</Text>
         </TouchableOpacity>
