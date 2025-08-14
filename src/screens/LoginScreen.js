@@ -23,7 +23,9 @@ export default function LoginScreen({ navigation }) {
 
   const onLogin = async () => {
     try {
+      console.log(username, password)
       const { token, user } = await login(username, password);
+      console.log("trying")
       navigation.replace('EldConnectScreen', { token, user });
     } catch (err) {
       Alert.alert('Login failed', err.response?.data?.message || err.message);
