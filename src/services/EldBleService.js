@@ -1,146 +1,183 @@
 // src/services/EldBleService.js
+// BLE logic using react-native-ble-plx.
+// Emits events via EventBus (identifier, odometer, speed, connected state)
+
 import { BleManager } from 'react-native-ble-plx';
+import { Buffer } from 'buffer';
 import EventBus from './EventBus';
+import { ELD_BLE } from '../config/index.js';
+import EldBleCache from './EldBleCache';
 
-// Named exports so your import { initEldBle } works.
 const manager = new BleManager();
-let isScanning = false;
-let connectedDeviceIds = new Set();
-let stateSubscription = null;
+let connectedDevice = null;
+let monitorSubs = [];
 
-const SERVICE_UUID = 'YOUR_SERVICE_UUID'.toLowerCase(); // <-- REPLACE
-const SPEED_CHAR_UUID = 'YOUR_SPEED_CHAR_UUID'.toLowerCase(); // <-- REPLACE
-const DEVICE_NAME_FILTER = 'YOUR_ELD_NAME_OR_PREFIX'; // optional
-
-export function initEldBle(opts = {}) {
-  // allow overrides via opts
-  const nameFilter = opts.nameFilter ?? DEVICE_NAME_FILTER;
-  const serviceUUIDs = opts.serviceUUIDs ?? (SERVICE_UUID ? [SERVICE_UUID] : null);
-
-  if (isScanning) return;
-  isScanning = true;
-
-  // Listen for adapter state
-  stateSubscription = manager.onStateChange((state) => {
-    if (state === 'PoweredOn') {
-      startScanning({ nameFilter, serviceUUIDs });
-    } else {
-      // adapter off: stop scanning
-      try { manager.stopDeviceScan(); } catch (e) {}
-    }
-  }, true);
+function decodeUtf8(base64Value) {
+/*************  ✨ Windsurf Command ⭐  *************/
+/**
+ * Initialize ELD BLE service.
+ * @param {Object} [opts={}] - Optional params
+ * @param {string} [opts.nameFilter] - Name filter for ELD devices (e.g. 'YOUR_ELD_NAME_OR_PREFIX')
+ * @param {string[]} [opts.serviceUUIDs] - Array of service UUIDs to scan for (e.g. ['YOUR_SERVICE_UUID'])
+ */
+/*******  f22ee011-7482-44dd-bdbc-1ebac7bb3b1e  *******/  try {
+    const buffer = Buffer.from(base64Value, 'base64');
+    return buffer.toString('utf8');
+  } catch (e) {
+    return null;
+  }
 }
 
-function startScanning({ nameFilter, serviceUUIDs }) {
-  try {
-    manager.startDeviceScan(serviceUUIDs || null, null, async (error, device) => {
-      if (error) {
-        console.warn('ELD BLE scan error:', error);
-        return;
-      }
-      if (!device) return;
+export async function startEldBle() {
+  manager.startDeviceScan([ELD_BLE.SERVICE_UUID], null, async (err, device) => {
+    if (err) {
+      console.warn('BLE scan error', err);
+      return;
+    }
+    if (!device) return;
 
-      // optional: filter by device name or localName
-      if (nameFilter && device.name && !device.name.includes(nameFilter) && !(device.localName && device.localName.includes(nameFilter))) {
-        return;
-      }
-
-      // Avoid connecting repeatedly
-      if (connectedDeviceIds.has(device.id)) return;
-
+    const name = (device.name || '').toLowerCase();
+    if (ELD_BLE.DEVICE_NAME && name.includes(ELD_BLE.DEVICE_NAME.toLowerCase())) {
+      manager.stopDeviceScan();
       try {
-        // connect
-        const d = await device.connect();
-        connectedDeviceIds.add(d.id);
+        connectedDevice = await device.connect();
+        await connectedDevice.discoverAllServicesAndCharacteristics();
 
-        // discover services/characteristics
-        await d.discoverAllServicesAndCharacteristics();
-
-        // Subscribe to the characteristic for speed (if the device supports notify)
-        // Make sure these UUIDs match your ELD vendor's documentation.
-        d.monitorCharacteristicForService(
-          SERVICE_UUID,
-          SPEED_CHAR_UUID,
-          (err, char) => {
-            if (err) {
-              console.warn('ELD char monitor error', err);
-              return;
-            }
-            if (!char || !char.value) return;
-
-            try {
-              const speed = parseBase64ToNumber(char.value);
-              // speed expected in mph — convert if needed (kph->mph)
-              EventBus.emit('speed', speed);
-            } catch (ex) {
-              console.warn('Failed to parse ELD char value', ex);
-            }
+        // 🔹 ELD Identifier (serial number)
+        try {
+          const read = await connectedDevice.readCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_ELD_IDENTIFIER
+          );
+          const identified = decodeUtf8(read.value);
+          if (identified) {
+            EldBleCache.setIdentifier(identified);   // <-- add
+            EventBus.emit('eld:identifier', identified);
           }
-        );
-      } catch (connErr) {
-        console.warn('ELD connect error', connErr);
-        // don't block; continue scanning
+        } catch (e) {
+          console.warn('ELD identifier read failed', e);
+        }
+
+        // 🔹 Odometer (read once + subscribe)
+        try {
+          const odChar = await connectedDevice.readCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_ODOMETER
+          );
+          const odText = decodeUtf8(odChar.value);
+          const odo = Number(odText);
+          if (!isNaN(odo)) {
+            EldBleCache.setOdometer(odo);           // <-- add
+            EventBus.emit('eld:odometer', odo);
+          }
+        } catch (e) {
+          console.warn('odometer read failed', e);
+        }
+
+        try {
+          const sub = connectedDevice.monitorCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_ODOMETER,
+            (error, characteristic) => {
+              if (error) {
+                console.warn('odometer monitor error', error);
+                return;
+              }
+              const odText = decodeUtf8(characteristic.value);
+              const odo = Number(odText);
+              if (!isNaN(odo)) {
+                EldBleCache.setOdometer(odo);           // <-- add
+                EventBus.emit('eld:odometer', odo);
+              }
+            }
+          );
+          monitorSubs.push(sub);
+        } catch (e) {
+          console.warn('odometer monitor failed', e);
+        }
+
+        
+        // 🔹 Engine Hours (read once + subscribe)
+        try {
+          const engChar = await connectedDevice.readCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_ENGINE_HOURS    // <-- make sure this exists in config/index.js
+          );
+          const engText = decodeUtf8(engChar.value);
+          const hours = Number(engText);
+          if (!isNaN(hours)) {
+            EldBleCache.setEngineHours(hours);     // <-- save to cache
+            EventBus.emit('eld:engineHours', hours);
+          }
+        } catch (e) {
+          console.warn('engine hours read failed', e);
+        }
+
+        try {
+          const sub3 = connectedDevice.monitorCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_ENGINE_HOURS,  // <-- from config
+            (error, characteristic) => {
+              if (error) {
+                console.warn('engine hours monitor error', error);
+                return;
+              }
+              const engText = decodeUtf8(characteristic.value);
+              const hours = Number(engText);
+              if (!isNaN(hours)) {
+                EldBleCache.setEngineHours(hours);  // <-- update cache
+                EventBus.emit('eld:engineHours', hours);
+              }
+            }
+          );
+          monitorSubs.push(sub3);
+        } catch (e) {
+          console.warn('engine hours monitor failed', e);
+        }
+
+        // 🔹 Speed (continuous subscription)
+        try {
+          const sub2 = connectedDevice.monitorCharacteristicForService(
+            ELD_BLE.SERVICE_UUID,
+            ELD_BLE.CHAR_SPEED,
+            (error, characteristic) => {
+              if (error) return;
+              const speedText = decodeUtf8(characteristic.value);
+              const speed = Number(speedText);
+              if (!isNaN(speed)) {
+                EldBleCache.setSpeed(speed);            // <-- add
+                EventBus.emit('speed', speed);
+              }
+            }
+          );
+          monitorSubs.push(sub2);
+        } catch (e) {
+          console.warn('speed monitor failed', e);
+        }
+
+        EventBus.emit('eld:connected', { id: device.id, name: device.name });
+      } catch (e) {
+        console.warn('Failed to connect to ELD', e);
       }
-    });
-  } catch (e) {
-    console.warn('startDeviceScan failed', e);
-  }
-}
-
-// Utility to decode base64 -> number. Adapt to your ELD payload.
-function parseBase64ToNumber(b64) {
-  // Try global atob (if available) or Buffer fallback
-  let raw = null;
-  try {
-    if (typeof atob === 'function') {
-      raw = atob(b64);
-    } else {
-      // Buffer fallback: ensure you have 'buffer' polyfill if required
-      // In many RN setups Buffer is available globally; if not, install 'buffer' and import.
-      // const { Buffer } = require('buffer');
-      raw = Buffer.from(b64, 'base64').toString('utf8');
     }
-  } catch (e) {
-    // As a last resort try simple base64 decode helper
-    throw new Error('Base64 decode failed: ' + e.message);
-  }
-
-  // Now raw contains bytes/ASCII. Your ELD's payload format decides how to parse.
-  // Common possibilities:
-  //  - raw string "12.4" -> parseFloat
-  //  - binary little-endian uint16 -> read bytes
-  // Implement the simplest default: numeric string
-  const n = parseFloat(raw);
-  if (Number.isNaN(n)) {
-    // If not numeric, try reading first byte as uint value:
-    const charCode = raw.charCodeAt(0);
-    if (Number.isFinite(charCode)) return charCode;
-    throw new Error('Unable to parse numeric speed from payload: ' + raw);
-  }
-  return n;
+  });
 }
 
 export async function stopEldBle() {
   try {
     manager.stopDeviceScan();
-    for (const id of Array.from(connectedDeviceIds)) {
-      try {
-        const d = await manager.devices([id]);
-        if (d && d[0]) {
-          await d[0].cancelConnection();
-        }
-      } catch (e) {
-        // ignore disconnect errors
+    if (connectedDevice) {
+      for (const sub of monitorSubs) {
+        try {
+          sub.remove();
+        } catch { }
       }
-    }
-    connectedDeviceIds.clear();
-    if (stateSubscription) {
-      stateSubscription.remove();
-      stateSubscription = null;
+      monitorSubs = [];
+      await connectedDevice.cancelConnection();
+      connectedDevice = null;
+      EventBus.emit('eld:disconnected');
     }
   } catch (e) {
     console.warn('stopEldBle error', e);
-  } finally {
-    isScanning = false;
   }
 }

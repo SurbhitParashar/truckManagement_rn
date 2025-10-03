@@ -1,96 +1,219 @@
-import React, { useState } from 'react';
+// src/screens/LogsScreen.js
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import {
   View,
   Text,
   ScrollView,
   StyleSheet,
   SafeAreaView,
-  StatusBar,
   Dimensions,
+  
   TouchableOpacity,
   TextInput,
-  Alert
-} from 'react-native';
-import { BarChart } from 'react-native-chart-kit';
-import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
-import Signature from 'react-native-signature-canvas';
+  Alert,
+  StatusBar
+} from "react-native";
+import { BarChart } from "react-native-chart-kit";
+import { createMaterialTopTabNavigator } from "@react-navigation/material-top-tabs";
+import Signature from "react-native-signature-canvas";
+import { useUser } from "../../../context/User";  
+
+// 🔹 import cache + eventbus
+import EldBleCache from "../../../services/EldBleCache";
+import EventBus from "../../../services/EventBus";
 
 const Tab = createMaterialTopTabNavigator();
 
-// LogsDetailScreen Component
-const LogsDetailScreen = () => {
-  const graphData = [2, 1, 1, 0]; // Sample hours: OFF, SB, D, ON
-  const graphLabels = ['OFF', 'SB', 'D', 'ON'];
+import { saveFormForDate, certifyLocalLog } from "../../../services/LogManager";
+import { startLogSync } from "../../../services/SyncServices";
 
-  const chartData = {
-    labels: graphLabels,
-    datasets: [
-      {
-        data: graphData,
-      },
-    ],
-  };
+//////////////////////////
+// Logs Tab (Preview)
+//////////////////////////
 
+const handleSubmit = async () => {
+  const logDate = route?.params?.log?.date || (new Date()).toISOString().split('T')[0];
+  await saveFormForDate(user.id, logDate, formData);
+  Alert.alert('Form Saved', 'Saved locally. It will sync when internet is available.');
+  // optionally trigger immediate sync
+  startLogSync({ getDriverUsername: () => user.id });
+};
+
+const LogsDetailScreen = ({ route }) => {
+  const { log } = route.params || {};
+  const events = log?.events || [];
+  const date = log?.date || "";
+
+  const { driver } = useUser(); // driver profile from backend
+
+  // 🔹 Local state for BLE values
+  const [eldValues, setEldValues] = useState({
+  odometer: EldBleCache.getLastOdometer() || "–",
+  engineHours: EldBleCache.getLastEngineHours() || "–",
+  speed: EldBleCache.getLastSpeed() || "–",
+  identifier: EldBleCache.getLastId() || "–",
+});
+
+
+  // subscribe to live updates
+  useEffect(() => {
+    const updateOdo = (v) => setEldValues((p) => ({ ...p, odometer: v }));
+    const updateEng = (v) => setEldValues((p) => ({ ...p, engineHours: v }));
+    const updateSpeed = (v) => setEldValues((p) => ({ ...p, speed: v }));
+    const updateId = (v) => setEldValues((p) => ({ ...p, identifier: v }));
+
+    EventBus.on("eld:odometer", updateOdo);
+    EventBus.on("eld:engineHours", updateEng);
+    EventBus.on("speed", updateSpeed);
+    EventBus.on("eld:identifier", updateId);
+
+    return () => {
+      EventBus.off("eld:odometer", updateOdo);
+      EventBus.off("eld:engineHours", updateEng);
+      EventBus.off("speed", updateSpeed);
+      EventBus.off("eld:identifier", updateId);
+    };
+  }, []);
+
+  const safe = (v) => (v !== undefined && v !== null && v !== "" ? v : "–");
+
+  // Group status hours (same as before)
+  const statusHours = useMemo(() => {
+    const totals = { OFF_DUTY: 0, SLEEPER: 0, DRIVE: 0, ON_DUTY: 0 };
+    for (let i = 0; i < events.length; i++) {
+      const curr = events[i];
+      const next = events[i + 1];
+      if (!next) continue;
+      const durationHrs =
+        (new Date(next.time) - new Date(curr.time)) / (1000 * 60 * 60);
+      if (totals[curr.status] !== undefined) {
+        totals[curr.status] += durationHrs;
+      }
+    }
+    Object.keys(totals).forEach((k) => {
+      totals[k] = Number(totals[k].toFixed(1));
+    });
+    return totals;
+  }, [events]);
+
+  const graphLabels = ["OFF", "SB", "D", "ON"];
+  const graphData = [
+    statusHours.OFF_DUTY,
+    statusHours.SLEEPER,
+    statusHours.DRIVE,
+    statusHours.ON_DUTY,
+  ];
+  const chartData = { labels: graphLabels, datasets: [{ data: graphData }] };
   const chartConfig = {
-    backgroundGradientFrom: '#fff',
-    backgroundGradientTo: '#fff',
-    fillShadowGradient: '#007AFF',
+    backgroundGradientFrom: "#fff",
+    backgroundGradientTo: "#fff",
+    fillShadowGradient: "#007AFF",
     fillShadowGradientOpacity: 1,
     color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
     labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
     barPercentage: 0.5,
-    propsForBackgroundLines: {
-      strokeDasharray: '', // solid lines
-    },
+    propsForBackgroundLines: { strokeDasharray: "" },
   };
-
-  const screenWidth = Dimensions.get('window').width;
+  const screenWidth = Dimensions.get("window").width;
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Inspection Preview</Text>
-        <Text style={styles.date}>Sun, Apr 20</Text>
+        <Text style={styles.date}>{date || "–"}</Text>
 
         {/* Driver Info */}
         <View style={styles.section}>
-          <Text style={styles.label}>Driver Name: <Text style={styles.value}>gagan CME-26</Text></Text>
-          <Text style={styles.label}>Driver ID: <Text style={styles.value}>test12</Text></Text>
-          <Text style={styles.label}>Driver License: <Text style={styles.value}>BH123D43Q</Text></Text>
-          <Text style={styles.label}>License State: <Text style={styles.value}>Alabama</Text></Text>
-          <Text style={styles.label}>Exempt Driver Status: <Text style={styles.value}>No</Text></Text>
-          <Text style={styles.label}>Unidentified Driving Records: <Text style={styles.value}>No</Text></Text>
-          <Text style={styles.label}>Co-Driver: <Text style={styles.value}>-</Text></Text>
+          <Text style={styles.label}>
+            Driver Name:{" "}
+            <Text style={styles.value}>
+              {driver ? `${safe(driver.first_name)} ${safe(driver.last_name)}` : "–"}
+            </Text>
+          </Text>
+          <Text style={styles.label}>
+            Driver ID: <Text style={styles.value}>{safe(driver?.username)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Driver License:{" "}
+            <Text style={styles.value}>{safe(driver?.license_number)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            License State: <Text style={styles.value}>{safe(driver?.state)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Exempt Driver Status:{" "}
+            <Text style={styles.value}>{driver?.exempt_driver ? "Yes" : "No"}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Unidentified Driving Records: <Text style={styles.value}>–</Text>
+          </Text>
+          <Text style={styles.label}>
+            Co-Driver: <Text style={styles.value}>–</Text>
+          </Text>
         </View>
 
         {/* Log Info */}
         <View style={styles.section}>
-          <Text style={styles.label}>Log Date: <Text style={styles.value}>04/20/2025</Text></Text>
-          <Text style={styles.label}>Display Date: <Text style={styles.value}>04/20/2025</Text></Text>
-          <Text style={styles.label}>Display Location: <Text style={styles.value}>Location</Text></Text>
-          <Text style={styles.label}>Driver Certified: <Text style={styles.value}>No</Text></Text>
+          <Text style={styles.label}>
+            Log Date: <Text style={styles.value}>{safe(log?.date)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Display Date: <Text style={styles.value}>{safe(log?.date)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Display Location: <Text style={styles.value}>–</Text>
+          </Text>
+          <Text style={styles.label}>
+            Driver Certified: <Text style={styles.value}>No</Text>
+          </Text>
         </View>
 
         {/* ELD Info */}
         <View style={styles.section}>
-          <Text style={styles.label}>ELD Registration ID: <Text style={styles.value}>N87C</Text></Text>
-          <Text style={styles.label}>ELD Identifier: <Text style={styles.value}>MRS201</Text></Text>
-          <Text style={styles.label}>Provider: <Text style={styles.value}>MyLogs</Text></Text>
-          <Text style={styles.label}>Data Diag. Indicators: <Text style={styles.value}>No</Text></Text>
-          <Text style={styles.label}>Data Malfn. Indicators: <Text style={styles.value}>No</Text></Text>
-          <Text style={styles.label}>24 Period Start Time: <Text style={styles.value}>00:00</Text></Text>
+          <Text style={styles.label}>
+            ELD Registration ID: <Text style={styles.value}>–</Text>
+          </Text>
+          <Text style={styles.label}>
+            ELD Identifier: <Text style={styles.value}>{safe(eldValues.identifier)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Provider: <Text style={styles.value}>{safe(driver?.added_by_company_name)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Data Diag. Indicators: <Text style={styles.value}>No</Text>
+          </Text>
+          <Text style={styles.label}>
+            Data Malfn. Indicators: <Text style={styles.value}>No</Text>
+          </Text>
+          <Text style={styles.label}>
+            24 Period Start Time: <Text style={styles.value}>00:00</Text>
+          </Text>
         </View>
 
         {/* Vehicle Info */}
         <View style={styles.section}>
-          <Text style={styles.label}>Odometer: <Text style={styles.value}>0.0 - 0.0</Text></Text>
-          <Text style={styles.label}>Distance: <Text style={styles.value}>0.0</Text></Text>
-          <Text style={styles.label}>Engine Hours: <Text style={styles.value}>0.0 - 0.0</Text></Text>
-          <Text style={styles.label}>Shipping Docs: <Text style={styles.value}>test</Text></Text>
-          <Text style={styles.label}>Carrier: <Text style={styles.value}>test</Text></Text>
-          <Text style={styles.label}>Main Office: <Text style={styles.value}>test</Text></Text>
-          <Text style={styles.label}>Home Terminal: <Text style={styles.value}>werwer</Text></Text>
+          <Text style={styles.label}>
+            Odometer: <Text style={styles.value}>{safe(eldValues.odometer)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Distance: <Text style={styles.value}>–</Text>
+          </Text>
+          <Text style={styles.label}>
+            Engine Hours: <Text style={styles.value}>{safe(eldValues.engineHours)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Shipping Docs: <Text style={styles.value}>–</Text>
+          </Text>
+          <Text style={styles.label}>
+            Carrier: <Text style={styles.value}>{safe(driver?.cargo_type)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Main Office: <Text style={styles.value}>{safe(driver?.added_by_company_name)}</Text>
+          </Text>
+          <Text style={styles.label}>
+            Home Terminal: <Text style={styles.value}>{safe(driver?.home_terminal)}</Text>
+          </Text>
         </View>
 
         {/* Chart */}
@@ -100,9 +223,7 @@ const LogsDetailScreen = () => {
             data={chartData}
             width={screenWidth - 40}
             height={220}
-            yAxisLabel=""
             chartConfig={chartConfig}
-            verticalLabelRotation={0}
             fromZero
             showValuesOnTopOfBars
             style={{ borderRadius: 16 }}
@@ -113,107 +234,83 @@ const LogsDetailScreen = () => {
   );
 };
 
-// Form Screen Component
-const FormScreen = () => {
+
+//////////////////////////
+// Form Tab
+//////////////////////////
+const FormTab = ({ route }) => {
+  const { user } = useUser();
   const [formData, setFormData] = useState({
-    driver: 'John Doe',
-    vehicle: 'Truck 101',
-    trailers: 'Trailer A1',
-    shippingDoc: 'DOC123456',
-    coDriver: 'Jane Smith'
+    driver: "",
+    vehicle: "",
+    trailers: "",
+    shippingDoc: "",
+    coDriver: "",
   });
 
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-  };
+  const handleChange = (field, value) =>
+    setFormData((prev) => ({ ...prev, [field]: value }));
 
-  const handleSubmit = () => {
-    Alert.alert(
-      'Form Submitted',
-      'Your log entry has been saved successfully',
-      [{ text: 'OK' }]
-    );
-    console.log('Form submitted:', formData);
+  const handleSubmit = async () => {
+    try {
+      const logDate =
+        route?.params?.log?.date || new Date().toISOString().split("T")[0];
+      await saveFormForDate(user.id, logDate, formData);
+
+      Alert.alert(
+        "Form Saved",
+        "Saved locally. It will sync when internet is available."
+      );
+
+      // trigger sync immediately
+      startLogSync({ getDriverUsername: () => user.id });
+    } catch (err) {
+      console.warn("❌ Failed to save form", err);
+      Alert.alert("Error", "Could not save form");
+    }
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Logs Entry Form</Text>
-        
-        <View style={styles.formSection}>
-          <Text style={styles.formLabel}>Driver</Text>
-          <TextInput
-            style={styles.input}
-            value={formData.driver}
-            onChangeText={(text) => handleInputChange('driver', text)}
-            placeholder="Enter driver name"
-          />
-        </View>
-
-        <View style={styles.formSection}>
-          <Text style={styles.formLabel}>Vehicle</Text>
-          <TextInput
-            style={styles.input}
-            value={formData.vehicle}
-            onChangeText={(text) => handleInputChange('vehicle', text)}
-            placeholder="Enter vehicle number"
-          />
-        </View>
-
-        <View style={styles.formSection}>
-          <Text style={styles.formLabel}>Trailers</Text>
-          <TextInput
-            style={styles.input}
-            value={formData.trailers}
-            onChangeText={(text) => handleInputChange('trailers', text)}
-            placeholder="Enter trailer number"
-          />
-        </View>
-
-        <View style={styles.formSection}>
-          <Text style={styles.formLabel}>Shipping Document</Text>
-          <TextInput
-            style={styles.input}
-            value={formData.shippingDoc}
-            onChangeText={(text) => handleInputChange('shippingDoc', text)}
-            placeholder="Enter shipping document"
-          />
-        </View>
-
-        <View style={styles.formSection}>
-          <Text style={styles.formLabel}>Co-Driver</Text>
-          <TextInput
-            style={styles.input}
-            value={formData.coDriver}
-            onChangeText={(text) => handleInputChange('coDriver', text)}
-            placeholder="Enter co-driver name"
-          />
-        </View>
-
-        <TouchableOpacity 
-          style={styles.submitButton}
-          onPress={handleSubmit}
-        >
-          <Text style={styles.submitButtonText}>Save Details</Text>
+        {Object.keys(formData).map((field) => (
+          <View key={field} style={styles.formSection}>
+            <Text style={styles.formLabel}>{field}</Text>
+            <TextInput
+              style={styles.input}
+              value={formData[field]}
+              placeholder={`Enter ${field}`}
+              onChangeText={(text) => handleChange(field, text)}
+            />
+          </View>
+        ))}
+        <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
+          <Text style={styles.submitButtonText}>Save</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 };
 
-// Certify Screen Component
-const CertifyScreen = () => {
-  const [signature, setSignature] = useState(null);
-  const [date] = useState('04/20/2025');
-  const signatureRef = React.useRef();
 
-  const handleSignature = (signature) => {
-    setSignature(signature);
-    console.log('Signature saved');
+
+//////////////////////////
+// Certify Tab
+//////////////////////////
+
+
+
+
+const CertifyTab = ({ route }) => {
+  const { user } = useUser();
+  const [signature, setSignature] = useState(null);
+  const signatureRef = useRef();
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+
+  const handleSignature = (sig) => {
+    setSignature(sig);
+    console.log("✅ Signature saved locally (base64)");
   };
 
   const handleClear = () => {
@@ -221,30 +318,50 @@ const CertifyScreen = () => {
     setSignature(null);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!signature) {
-      Alert.alert('Error', 'Please provide your signature before certifying');
+      Alert.alert("Error", "Please provide your signature before certifying");
       return;
     }
-    Alert.alert(
-      'Logs Certified',
-      'Your logs have been successfully certified',
-      [{ text: 'OK' }]
-    );
-    console.log('Logs certified with signature:', signature);
+    try {
+      const logDate =
+        route?.params?.log?.date || new Date().toISOString().split("T")[0];
+      await certifyLocalLog(
+        user.id,
+        logDate,
+        signature,
+        user.name || user.id
+      );
+
+      Alert.alert(
+        "Logs Certified",
+        "Signature saved locally and will sync when internet is available."
+      );
+
+      // trigger sync immediately
+      startLogSync({ getDriverUsername: () => user.id });
+    } catch (err) {
+      console.warn("❌ Failed to certify log", err);
+      Alert.alert("Error", "Could not certify log");
+    }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        scrollEnabled={scrollEnabled}
+      >
         <Text style={styles.title}>Certify Logs</Text>
-        
+
         <View style={styles.signatureContainer}>
           <Text style={styles.signatureLabel}>Your Signature</Text>
           <View style={styles.signatureBox}>
             <Signature
               ref={signatureRef}
               onOK={handleSignature}
+              onBegin={() => setScrollEnabled(false)}
+              onEnd={() => setScrollEnabled(true)}
               onClear={handleClear}
               descriptionText="Sign above"
               clearText="Clear"
@@ -253,22 +370,17 @@ const CertifyScreen = () => {
               style={styles.signaturePad}
             />
           </View>
-          <TouchableOpacity 
-            style={styles.clearButton}
-            onPress={handleClear}
-          >
+          <TouchableOpacity style={styles.clearButton} onPress={handleClear}>
             <Text style={styles.clearButtonText}>Reset Signature</Text>
           </TouchableOpacity>
         </View>
 
         <Text style={styles.certifyText}>
-          I hereby declare that my data entries and my record of duty for this 24-hour period are true and correct.
+          I hereby declare that my data entries and my record of duty for this
+          24-hour period are true and correct.
         </Text>
 
-        <TouchableOpacity 
-          style={styles.certifyButton}
-          onPress={handleConfirm}
-        >
+        <TouchableOpacity style={styles.certifyButton} onPress={handleConfirm}>
           <Text style={styles.certifyButtonText}>Certify Logs</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -276,118 +388,54 @@ const CertifyScreen = () => {
   );
 };
 
-// Main LogsScreen with Tab Navigation
-const LogsScreen = () => {
+
+
+
+//////////////////////////
+// Main Screen (Tabs)
+//////////////////////////
+export default function LogsScreen({ route }) {
+  const { log } = route.params || {};
   return (
     <Tab.Navigator
-      screenOptions={{
-        tabBarActiveTintColor: '#007AFF',
-        tabBarInactiveTintColor: '#555',
-        tabBarIndicatorStyle: {
-          backgroundColor: '#007AFF',
-        },
-        tabBarLabelStyle: {
-          fontSize: 14,
-          fontWeight: 'bold',
-        },
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          elevation: 2,
-        },
+          screenOptions={{
+        swipeEnabled: false,   // ✅ Disable swipe between tabs
       }}
-    >
-      <Tab.Screen name="Logs" component={LogsDetailScreen} />
-      <Tab.Screen name="Form" component={FormScreen} />
-      <Tab.Screen name="Certify" component={CertifyScreen} />
+>
+      <Tab.Screen name="Logs" component={LogsDetailScreen} initialParams={{ log }} />
+      <Tab.Screen name="Form" component={FormTab} />
+      <Tab.Screen name="Certify" component={CertifyTab} />
     </Tab.Navigator>
   );
-};
+}
 
+//////////////////////////
+// Styles
+//////////////////////////
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  scroll: {
-    padding: 20,
-    paddingBottom: 60,
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
+  date: { textAlign: 'center', marginBottom: 20 },
+  section: { marginBottom: 15 },
+  label: { fontWeight: '600' },
+  value: { fontWeight: '400' },
+  graphContainer: { marginVertical: 20 },
+  graphTitle: { textAlign: 'center', marginBottom: 10 },
+  formSection: { marginBottom: 15 },
+  formLabel: { fontWeight: '600' },
+  input: { borderWidth: 1, borderColor: '#ddd', padding: 10, borderRadius: 6 },
+  submitButton: { backgroundColor: '#007AFF', padding: 15, borderRadius: 8, marginTop: 10 },
+  submitButtonText: { color: '#fff', textAlign: 'center' },
+  certifyButton: { backgroundColor: 'green', padding: 15, borderRadius: 8 },
+  certifyButtonText: { color: '#fff', textAlign: 'center' },
+  scroll: { padding: 20, paddingBottom: 60 },
   title: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
     color: '#007AFF',
     textAlign: 'center',
-    marginBottom: 5,
-  },
-  date: {
-    fontSize: 16,
-    color: '#444',
-    textAlign: 'center',
     marginBottom: 20,
   },
-  section: {
-    marginBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-    paddingBottom: 10,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4,
-  },
-  value: {
-    fontWeight: 'normal',
-    color: '#555',
-  },
-  graphContainer: {
-    marginTop: 20,
-    paddingBottom: 30,
-  },
-  graphTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#007AFF',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  formSection: {
-    marginBottom: 15,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
-  },
-  formLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 5,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 6,
-    padding: 12,
-    fontSize: 16,
-    marginTop: 5,
-    backgroundColor: '#f9f9f9',
-  },
-  submitButton: {
-    backgroundColor: '#007AFF',
-    padding: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  submitButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  signatureContainer: {
-    marginBottom: 20,
-  },
+  signatureContainer: { marginBottom: 20 },
   signatureLabel: {
     fontSize: 16,
     fontWeight: '600',
@@ -401,39 +449,30 @@ const styles = StyleSheet.create({
     height: 200,
     backgroundColor: '#f9f9f9',
     marginBottom: 10,
+    overflow: 'hidden',
   },
-  signaturePad: {
-    flex: 1,
-  },
+  signaturePad: { flex: 1 },
   clearButton: {
     backgroundColor: '#f44336',
     padding: 10,
     borderRadius: 6,
     alignSelf: 'flex-end',
   },
-  clearButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
+  clearButtonText: { color: '#fff', fontWeight: 'bold' },
   certifyText: {
-    fontSize: 16,
-    color: '#333',
+    fontSize: 15,
+    color: '#444',
+    marginTop: 20,
     marginBottom: 20,
-    lineHeight: 24,
+    lineHeight: 22,
+    textAlign: 'center',
   },
   certifyButton: {
     backgroundColor: '#4CAF50',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 10,
   },
-  certifyButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  certifyButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });
-
-export default LogsScreen;

@@ -8,39 +8,46 @@ import {
   Dimensions,
   KeyboardAvoidingView,
   Platform,
+  Alert
 } from 'react-native';
 import { FontAwesome, MaterialIcons } from '@expo/vector-icons';
 import { login } from '../api/authServices';
+import { useUser } from '../context/User'
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.85;
 
 export default function LoginScreen({ navigation }) {
-
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-
+  const { setUser } = useUser();
 
   const onLogin = async () => {
     try {
-      console.log(username, password)
+      // Call your backend login service
       const { token, user } = await login(username, password);
-      console.log("trying")
-      navigation.replace('EldConnectScreen', { token, user });
+
+      // ✅ Save user in context
+      // From now on, RootNavigator will swap AuthNavigator → AppNavigator
+      setUser({
+        id: username,      // still keep username for reference
+        name: user?.name || username,
+        token: token,
+        driverId: null     // placeholder until loadDriverProfile runs
+      });
+
+      // move to eldconnectscreen
+      navigation.navigate('EldConnectScreen');
     } catch (err) {
       Alert.alert('Login failed', err.response?.data?.message || err.message);
     }
   };
-
-
-
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.select({ ios: 'padding', android: null })}
     >
-
       <View style={styles.card}>
         <View style={styles.iconWrapper}>
           <MaterialIcons name="lock-outline" size={32} color="#fff" />
@@ -49,13 +56,9 @@ export default function LoginScreen({ navigation }) {
         <Text style={styles.title}>Welcome Back</Text>
         <Text style={styles.subtitle}>Please sign in to continue</Text>
 
+        {/* Username Input */}
         <View style={styles.inputGroup}>
-          <FontAwesome
-            name="user"
-            size={18}
-            color="#999"
-            style={styles.inputIcon}
-          />
+          <FontAwesome name="user" size={18} color="#999" style={styles.inputIcon} />
           <TextInput
             style={styles.input}
             placeholder="Enter your user ID"
@@ -65,13 +68,9 @@ export default function LoginScreen({ navigation }) {
           />
         </View>
 
+        {/* Password Input */}
         <View style={styles.inputGroup}>
-          <FontAwesome
-            name="key"
-            size={18}
-            color="#999"
-            style={styles.inputIcon}
-          />
+          <FontAwesome name="key" size={18} color="#999" style={styles.inputIcon} />
           <TextInput
             style={styles.input}
             placeholder="Enter your password"
@@ -81,10 +80,10 @@ export default function LoginScreen({ navigation }) {
           />
         </View>
 
-        <TouchableOpacity
-          style={styles.button}
-          // onPress={onLogin}
-          onPress={() => navigation.navigate('EldConnectScreen')}
+        {/* Sign In Button */}
+        <TouchableOpacity style={styles.button}
+          onPress={onLogin}
+        // onPress={() => navigation.navigate('EldConnectScreen')}
         >
           <Text style={styles.buttonText}>Sign In</Text>
         </TouchableOpacity>
@@ -92,6 +91,7 @@ export default function LoginScreen({ navigation }) {
     </KeyboardAvoidingView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: {

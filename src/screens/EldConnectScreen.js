@@ -1,3 +1,4 @@
+// src/screens/EldConnectScreen.js
 import React, { useState } from 'react';
 import {
   View,
@@ -6,17 +7,31 @@ import {
   TouchableOpacity,
   StyleSheet,
   StatusBar,
-  Alert
+  Alert,
+  ScrollView,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
-import { enableBluetooth, connectToEld } from '../services/bluetoothService';
+import { enableBluetooth } from '../services/bluetoothService';
 import { enableLocation } from '../services/locationService';
+import ELDService from '../services/ELDService';
+import { ELD_REGISTRATION_ID } from '../config';
+import { useEld } from '../context/EldContext';
+
 
 const EldConnectScreen = ({ navigation }) => {
   const [mac, setMac] = useState('');
   const [btEnabled, setBtEnabled] = useState(false);
   const [locEnabled, setLocEnabled] = useState(false);
   const [connecting, setConnecting] = useState(false);
+
+  // Telemetry values
+  // const [identifier, setIdentifier] = useState(null);
+  // const [odometer, setOdometer] = useState(null);
+  // const [speed, setSpeed] = useState(null);
+  // const [engineHours, setEngineHours] = useState(null);
+
+  const { eldData } = useEld();
+
 
   const handleToggleBluetooth = async () => {
     try {
@@ -47,10 +62,12 @@ const EldConnectScreen = ({ navigation }) => {
     }
     try {
       setConnecting(true);
-      const device = await connectToEld(mac.trim());
-      Alert.alert('Connected', `Device ID: ${device.id}`);
-      // navigate or save state here, e.g.:
-      // navigation.navigate('HomeScreen');
+
+      // BLE connection — all data will come via EventBus and context
+      await ELDService.connectToELD(mac.trim());
+      Alert.alert('Connected', 'Connected to ELD. Telemetry will update shortly.');
+
+
     } catch (e) {
       Alert.alert('Connection Failed', e.message);
     } finally {
@@ -59,7 +76,7 @@ const EldConnectScreen = ({ navigation }) => {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container}>
       <StatusBar backgroundColor="#ffffff" barStyle="dark-content" />
 
       <View style={styles.header}>
@@ -123,86 +140,50 @@ const EldConnectScreen = ({ navigation }) => {
       >
         <Text style={styles.disconnectText}>CONTINUE DISCONNECTED</Text>
       </TouchableOpacity>
-    </View>
+
+      {/* --- ELD Data Display --- */}
+      <View style={styles.infoBox}>
+        <Text style={styles.label}>FMCSA Registration ID:</Text>
+        <Text style={styles.value}>{ELD_REGISTRATION_ID}</Text>
+      </View>
+      <View style={styles.infoBox}>
+        <Text style={styles.label}>ELD Identifier (Serial):</Text>
+        <Text style={styles.value}>{eldData.identifier || '-'}</Text>
+      </View>
+      <View style={styles.infoBox}>
+        <Text style={styles.label}>Odometer:</Text>
+        <Text style={styles.value}>{eldData.odometer || '-'}</Text>
+      </View>
+      <View style={styles.infoBox}>
+        <Text style={styles.label}>Speed:</Text>
+        <Text style={styles.value}>{eldData.speed || '-'}</Text>
+      </View>
+      <View style={styles.infoBox}>
+        <Text style={styles.label}>Engine Hours:</Text>
+        <Text style={styles.value}>{eldData.engineHours || '-'}</Text>
+      </View>
+    </ScrollView>
   );
 };
 
 export default EldConnectScreen;
 
-// (Your existing styles, unchanged)
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    padding: 20,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  banner: {
-    backgroundColor: '#cce5ff',
-    padding: 10,
-    marginVertical: 15,
-    borderRadius: 5,
-  },
-  bannerText: {
-    color: '#004085',
-    fontWeight: 'bold',
-  },
-  verifyBox: {
-    marginBottom: 20,
-  },
-  instructions: {
-    fontSize: 16,
-    marginBottom: 8,
-    color: '#333',
-  },
-  bullet: {
-    fontSize: 14,
-    color: '#555',
-    marginLeft: 10,
-    marginBottom: 2,
-  },
-  inputLabel: {
-    fontSize: 14,
-    color: '#000',
-    marginBottom: 6,
-  },
-  input: {
-    borderColor: '#007bff',
-    borderWidth: 1,
-    borderRadius: 6,
-    padding: 10,
-    marginBottom: 20,
-    color: '#000',
-  },
-  connectBtn: {
-    backgroundColor: '#007bff',
-    padding: 15,
-    borderRadius: 30,
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  connectText: {
-    color: '#fff',
-    fontWeight: 'bold',
-  },
-  disconnectBtn: {
-    borderColor: '#007bff',
-    borderWidth: 1,
-    padding: 15,
-    borderRadius: 30,
-    alignItems: 'center',
-  },
-  disconnectText: {
-    color: '#007bff',
-    fontWeight: 'bold',
-  },
+  container: { flex: 1, backgroundColor: '#ffffff', padding: 20 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+  banner: { backgroundColor: '#cce5ff', padding: 10, marginVertical: 15, borderRadius: 5 },
+  bannerText: { color: '#004085', fontWeight: 'bold' },
+  verifyBox: { marginBottom: 20 },
+  instructions: { fontSize: 16, marginBottom: 8, color: '#333' },
+  bullet: { fontSize: 14, color: '#555', marginLeft: 10, marginBottom: 2 },
+  inputLabel: { fontSize: 14, color: '#000', marginBottom: 6 },
+  input: { borderColor: '#007bff', borderWidth: 1, borderRadius: 6, padding: 10, marginBottom: 20, color: '#000' },
+  connectBtn: { backgroundColor: '#007bff', padding: 15, borderRadius: 30, alignItems: 'center', marginBottom: 10 },
+  connectText: { color: '#fff', fontWeight: 'bold' },
+  disconnectBtn: { borderColor: '#007bff', borderWidth: 1, padding: 15, borderRadius: 30, alignItems: 'center' },
+  disconnectText: { color: '#007bff', fontWeight: 'bold' },
+  infoBox: { marginVertical: 10 },
+  label: { fontWeight: 'bold' },
+  value: { color: '#007AFF', marginTop: 4 },
 });

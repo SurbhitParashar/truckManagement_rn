@@ -7,7 +7,8 @@ import {
   TouchableOpacity,
   ScrollView,
   SafeAreaView,
-  Modal
+  Modal,
+  Button
 } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import * as Animatable from 'react-native-animatable';
@@ -15,7 +16,7 @@ import * as Animatable from 'react-native-animatable';
 import CircularTimer from '../components/CircularTimer';
 import useHosLogic from '../hooks/useHosLogic';
 import { startHosBackground } from '../services/BackgroundService';
-import { initEldBle } from '../services/EldBleService';
+import { startEldBle } from '../services/EldBleService';
 import statusOptions from '../utils/statusOptions';
 import {
   MAX_DRIVE,
@@ -24,7 +25,32 @@ import {
   CYCLE_LIMIT
 } from '../utils/fmcsarules';
 
+import { saveStatusChange } from '../services/LogManager';
+import { useUser } from '../context/User';
+
+
 export default function HomeScreen({ navigation }) {
+
+  // const driverId = 'driver123'; // replace with your actual logged-in driver ID
+  const { user, setUser, driver, loadDriverProfile } = useUser();
+
+
+  // only as a debug/testing tool, not in production.
+  const handleTest = async () => {
+    await saveStatusChange(driverId, 'ON_DUTY');
+    console.log('Status saved!');
+  };
+
+  const driverId = user?.id || 'guest-driver'; // ✅ use logged-in username
+
+  // Auto-load driver profile when user is available
+  useEffect(() => {
+    if (user?.id) {
+      // console.log("📌 HomeScreen: Fetching driver profile for", user.id);
+      loadDriverProfile(user.id); // call backend
+    }
+  }, [user]);
+
   // hook must be called before using `state`
   const { state, setStatus } = useHosLogic();
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
@@ -32,7 +58,7 @@ export default function HomeScreen({ navigation }) {
   // start background services once
   useEffect(() => {
     startHosBackground(); // emits ticks via EventBus
-    initEldBle();         // starts BLE scanning / speed events
+    startEldBle();
   }, []);
 
   // ---------- Helpers ----------
@@ -114,12 +140,12 @@ export default function HomeScreen({ navigation }) {
   // optional debug logs (remove or gate behind __DEV__)
   if (__DEV__) {
     // eslint-disable-next-line no-console
-    console.log('[HomeScreen] state:', {
-      status: state.status,
-      driveThisWindow: state.driveThisWindow,
-      windowStart: state.windowStart,
-      cycleUsed: state.cycleUsed
-    });
+    // console.log('[HomeScreen] state:', {
+    //   status: state.status,
+    //   driveThisWindow: state.driveThisWindow,
+    //   windowStart: state.windowStart,
+    //   cycleUsed: state.cycleUsed
+    // });
   }
 
   // UI rendering
@@ -130,7 +156,9 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.header}>
           <View style={styles.headerTextContainer}>
             <Text style={styles.subtitle}>Current Driver</Text>
-            <Text style={styles.title}>Gagan CME-26 | A1</Text>
+            <Text style={styles.title}>
+              {driver ? `${driver.first_name} ${driver.last_name}` : "Loading..."}
+            </Text>
           </View>
           <View style={styles.headerIcons}>
             <TouchableOpacity style={styles.iconButton}>
@@ -217,9 +245,13 @@ export default function HomeScreen({ navigation }) {
           ))}
         </View>
 
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Button title="Test Save Status" onPress={handleTest} />
+        </View>
+
         {/* Logout button */}
         <Animatable.View animation="fadeInUp" duration={800} delay={400}>
-          <TouchableOpacity style={styles.logoutButton}>
+          <TouchableOpacity style={styles.logoutButton} onPress={() => setUser(null)}>
             <Icon name="power-settings-new" size={20} color="#fff" />
             <Text style={styles.logoutButtonText}>Logout</Text>
           </TouchableOpacity>
